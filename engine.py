@@ -187,6 +187,7 @@ LN2 = F("0.693147180559945309417232121458176568")
 PI = F("3.1415926535897932384626433832795028841971693993751058")
 PI_2 = PI / 2
 PI_4 = PI / 4
+TAU = 2 * PI
 
 
 # Padé approximants around x=1.
@@ -439,122 +440,152 @@ def sinc(x):
     else:
         return rational_eval(x, numerator_sinc, denumerator_sinc)
 
-def _reduce_angle(xf):
-    """Reduce angle to [-pi, pi] (float)."""
-    r = (xf + PI_F) % TAU_F
-    return r - PI_F
+def _reduce_angle(x):
+    """Reduce angle to [-pi, pi] exactly using Fraction."""
+    xf = _as_fraction(x)
+    # Modulo with Fraction preserves precision.
+    # Result of % TAU is in [0, TAU)
+    r = (xf + PI) % TAU
+    return r - PI
 
 
 def _sin_small(x):
-    """sin(x) on small |x| (float), using Taylor on [-pi/4, pi/4]."""
-    # sin(x) = x * (1 - x^2/3! + x^4/5! - x^6/7! + ...)
+    """sin(x) on small |x| using Taylor series with exact coefficients."""
+    # sin(x) = x * (1 - x^2/3! + x^4/5! - ...)
     x2 = x * x
-    # Horner for the series factor:
-    # 1 + x2*(-1/6 + x2*(1/120 + x2*(-1/5040 + x2*(1/362880 + x2*(-1/39916800 + x2*(1/6227020800))))))
-    f = 1.0
-    f = f + x2 * (-1.0 / 6.0)
-    f = f + x2 * x2 * (1.0 / 120.0)
-    f = f + x2 * x2 * x2 * (-1.0 / 5040.0)
-    f = f + x2 * x2 * x2 * x2 * (1.0 / 362880.0)
-    f = f + x2 * x2 * x2 * x2 * x2 * (-1.0 / 39916800.0)
-    f = f + x2 * x2 * x2 * x2 * x2 * x2 * (1.0 / 6227020800.0)
+    
+    # Coefficients:
+    # 1/3! = 1/6
+    # 1/5! = 1/120
+    # 1/7! = 1/5040
+    # 1/9! = 1/362880
+    # 1/11! = 1/39916800
+    # 1/13! = 1/6227020800
+    # 1/15! = 1/1307674368000
+    # 1/17! = 1/355687428096000
+    
+    f = F(1)
+    f += x2 * -F(1, 6)
+    f += x2 * x2 * F(1, 120)
+    f += x2 * x2 * x2 * -F(1, 5040)
+    f += x2 * x2 * x2 * x2 * F(1, 362880)
+    f += x2 * x2 * x2 * x2 * x2 * -F(1, 39916800)
+    f += x2 * x2 * x2 * x2 * x2 * x2 * F(1, 6227020800)
+    f += x2 * x2 * x2 * x2 * x2 * x2 * x2 * -F(1, 1307674368000)
+    f += x2 * x2 * x2 * x2 * x2 * x2 * x2 * x2 * F(1, 355687428096000)
+    
     return x * f
 
 
 def _cos_small(x):
-    """cos(x) on small |x| (float), using Taylor on [-pi/4, pi/4]."""
+    """cos(x) on small |x| using Taylor series with exact coefficients."""
+    # cos(x) = 1 - x^2/2! + x^4/4! - ...
     x2 = x * x
-    # cos(x) = 1 - x^2/2! + x^4/4! - x^6/6! + ...
-    f = 1.0
-    f = f + x2 * (-1.0 / 2.0)
-    f = f + x2 * x2 * (1.0 / 24.0)
-    f = f + x2 * x2 * x2 * (-1.0 / 720.0)
-    f = f + x2 * x2 * x2 * x2 * (1.0 / 40320.0)
-    f = f + x2 * x2 * x2 * x2 * x2 * (-1.0 / 3628800.0)
-    f = f + x2 * x2 * x2 * x2 * x2 * x2 * (1.0 / 479001600.0)
+    
+    # Coefficients:
+    # 1/2! = 1/2
+    # 1/4! = 1/24
+    # 1/6! = 1/720
+    # 1/8! = 1/40320
+    # 1/10! = 1/3628800
+    # 1/12! = 1/479001600
+    # 1/14! = 1/87178291200
+    # 1/16! = 1/20922789888000
+    
+    f = F(1)
+    f += x2 * -F(1, 2)
+    f += x2 * x2 * F(1, 24)
+    f += x2 * x2 * x2 * -F(1, 720)
+    f += x2 * x2 * x2 * x2 * F(1, 40320)
+    f += x2 * x2 * x2 * x2 * x2 * -F(1, 3628800)
+    f += x2 * x2 * x2 * x2 * x2 * x2 * F(1, 479001600)
+    f += x2 * x2 * x2 * x2 * x2 * x2 * x2 * -F(1, 87178291200)
+    f += x2 * x2 * x2 * x2 * x2 * x2 * x2 * x2 * F(1, 20922789888000)
+    
     return f
 
 
 def sin(x):
-    xf = _reduce_angle(float(x))
+    # Perform reduction exactly
+    xr = _reduce_angle(x)
 
     # Use symmetries to map to [0, pi]
-    if xf < 0.0:
-        return -sin(-xf)
+    if xr < 0:
+        return float(-sin(-xr)) # Recurse with positive reduced angle
 
-    # Now xf in [0, pi]
-    if xf > PI_2_F:
+    # Now xr in [0, pi]
+    if xr > PI_2:
         # sin(x) = sin(pi - x)
-        xf = PI_F - xf
+        xr = PI - xr
 
-    # Now xf in [0, pi/2]
-    if xf <= PI_4_F:
-        return _sin_small(xf)
+    # Now xr in [0, pi/2]
+    if xr <= PI_4:
+        return float(_sin_small(xr))
 
-    # sin(x) = cos(pi/2 - x), and (pi/2 - x) in [0, pi/4]
-    return _cos_small(PI_2_F - xf)
+    # sin(x) = cos(pi/2 - x)
+    return float(_cos_small(PI_2 - xr))
 
 
 def cos(x):
-    xf = _reduce_angle(float(x))
+    # Perform reduction exactly
+    xr = _reduce_angle(x)
 
     # cos is even
-    if xf < 0.0:
-        xf = -xf
+    if xr < 0:
+        xr = -xr
 
-    # Now xf in [0, pi]
-    if xf > PI_2_F:
+    # Now xr in [0, pi]
+    if xr > PI_2:
         # cos(x) = -cos(pi - x)
-        return -cos(PI_F - xf)
+        return float(-cos(PI - xr)) # Recurse with simpler angle
 
-    # Now xf in [0, pi/2]
-    if xf <= PI_4_F:
-        return _cos_small(xf)
+    # Now xr in [0, pi/2]
+    if xr <= PI_4:
+        return float(_cos_small(xr))
 
-    # cos(x) = sin(pi/2 - x), and (pi/2 - x) in [0, pi/4]
-    return _sin_small(PI_2_F - xf)
+    # cos(x) = sin(pi/2 - x)
+    return float(_sin_small(PI_2 - xr))
 
 
 _POLE_EPS = 1e-16
 
 
-def _reduce_pi(xf):
-    """Reduce angle to [-pi/2, pi/2) by mod pi (float)."""
-    r = _reduce_angle(xf)  # [-pi, pi]
-    if r >= PI_2_F:
-        r -= PI_F
-    elif r < -PI_2_F:
-        r += PI_F
+def _reduce_pi(x):
+    """Reduce angle to [-pi/2, pi/2) by mod pi (exact Fraction)."""
+    # x can be float/Fraction
+    r = _reduce_angle(x)  # [-pi, pi] Fraction
+    if r >= PI_2:
+        r -= PI
+    elif r < -PI_2:
+        r += PI
     return r
 
 
 def tan(x):
-    xf = float(x)
-
     # First, detect exact poles using 2pi reduction so tan(pi/2) gives +inf and tan(-pi/2) gives -inf.
-    r2 = _reduce_angle(xf)  # [-pi, pi]
-    if abs(r2 - PI_2_F) < _POLE_EPS:
+    r2 = _reduce_angle(x)  # [-pi, pi] Fraction
+    if abs(r2 - PI_2) < _POLE_EPS:
         return float("inf")
-    if abs(r2 + PI_2_F) < _POLE_EPS:
+    if abs(r2 + PI_2) < _POLE_EPS:
         return float("-inf")
 
     # Use pi-reduced angle for regular evaluation (keeps values bounded, fixes sign flip across poles).
-    r = _reduce_pi(xf)
+    r = _reduce_pi(x) # Fraction
 
     # Poles at r = +/- pi/2
-    if abs(abs(r) - PI_2_F) < _POLE_EPS:
-        return float("inf") if r > 0.0 else float("-inf")
+    if abs(abs(r) - PI_2) < _POLE_EPS:
+        return float("inf") if r > 0 else float("-inf")
 
     s = sin(r)
     c = cos(r)
     if abs(c) < _POLE_EPS:
-        return float("inf") if r > 0.0 else float("-inf")
+        return float("inf") if r > 0 else float("-inf")
     return s / c
 
 
 def cot(x):
     # Reduce by pi so pole at 0 represents k*pi.
-    r = _reduce_pi(float(x))
+    r = _reduce_pi(x) # Fraction
 
     # Poles at r = 0
     if abs(r) < _POLE_EPS:
@@ -564,7 +595,7 @@ def cot(x):
     s = sin(r)
     c = cos(r)
     if abs(s) < _POLE_EPS:
-        return float("inf") if r > 0.0 else float("-inf")
+        return float("inf") if r > 0 else float("-inf")
     return c / s
 
 
