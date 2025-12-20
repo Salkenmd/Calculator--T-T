@@ -9,3 +9,6 @@ TODO:
 2. Seperate the math stuff (Done?)
 3. Port python prototype to C. (In progress)
 4. Suffer to 32-bit ARM ASM. (not yet)
+
+Extra TODO:
+1. Write a little documentation on how this all works.
