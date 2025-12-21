@@ -236,8 +236,20 @@ def ln(x):
     z = (m - 1.0) / (m + 1.0)
     return 2.0 * _atanh_series(z) + e * LN2_F
 
+def log_a_n(a,n):
+    af = float(a)
+    nf = float(n)
+    if af <= 0.0:
+        raise ValueError("Cannot evaluate in complex set. Argument A should be positive")
+    if nf <= 0.0:
+        raise ValueError("Cannot evaluate in complex set. Base n should be positive")
+    if nf == 1.0:
+        raise ValueError("Base n cannot be 1")
+    return (ln(af)/ln(nf))
+
 def sinc(x):
     if x==0:
         return 1
     else:
         return rational_eval(x, numerator_sinc, denumerator_sinc)
+
