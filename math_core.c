@@ -1,5 +1,4 @@
 #include "math_core.h"
-
 #include <stdint.h>
 
 #ifndef NAN
@@ -199,6 +198,8 @@ Real mc_round(Real x) {
 const Real E_F_C = 2.7182818284590450907955982984276488;
 static const Real LN2_C = 0.69314718055994528622676398299518041;
 static const Real LN2_F_C = 0.69314718055994528622676398299518041;
+
+
 const Real PI_C = 3.1415926535897931159979634685441852;
 const Real PI_2_C = 1.5707963267948965579989817342720926;
 static const Real PI_2_F_C = 1.5707963267948965579989817342720926;
@@ -325,7 +326,7 @@ static const Real numerator_cbrt_13_13[] = {
 static const int numerator_cbrt_13_13_len = 14;
 
 static const Real numerator_exp[] = {
-    1, 0.5, 0.11999999999999999555910790149937384, 0.018333333333333333425851918718763045,
+    1, 0.5, 0.12, 0.018333333333333333425851918718763045,
     0.0019927536231884057128793674706912498, 0.00016304347826086957803926047461118287,
     1.0351966873706003395257460586442733e-05, 5.1759834368530021211452039203715358e-07,
     2.04315135665250075022251601561743e-08, 6.3060227057175949591547168724629119e-10,
@@ -507,8 +508,17 @@ Real mc_cbrt(Real x) {
 }
 
 Real mc_exp(Real x) {
+    if (mc_isnan(x)) return x;
+    if (mc_isinf(x)) return (x > 0) ? x : 0.0;
+    
+    // Bounds check to avoid overflow/underflow or excessive computation
+    if (x > 709.78) return INFINITY;
+    if (x < -745.13) return 0.0;
+    
     Real k_float = mc_round(x / LN2_F_C);
     int k = (int)k_float;
+    
+    // Standard reduction: r = x - k * LN2
     Real r = x - k * LN2_C; 
     
     Real e_r = rational_eval(r, numerator_exp, numerator_exp_len, denumerator_exp, denumerator_exp_len);
@@ -635,16 +645,24 @@ static Real _atanh_series(Real z) {
 Real mc_ln1p(Real u) {
     if (u <= -1) return NAN;
     if (u == 0) return 0;
-    Real m = 1.0 + u;
-    Real z = (m - 1.0) / (m + 1.0);
-    return 2.0 * _atanh_series(z);
+    
+    // For small u, use atanh method: ln(1+u) = 2 atanh( u / (2+u) )
+    // If u is large, use mc_ln(1+u).
+    if (mc_fabs(u) < 0.375) {
+        Real z = u / (2.0 + u);
+        return 2.0 * _atanh_series(z);
+    }
+    return mc_ln(1.0 + u);
 }
 
 Real mc_ln(Real x) {
     if (x <= 0) return NAN;
     int e;
     Real m = mc_frexp(x, &e);
+    // m is [0.5, 1). z = (m-1)/(m+1) is in [-1/3, 0).
+    // range of z is small, series should converge well.
     Real z = (m - 1.0) / (m + 1.0);
+    // 2 * atanh(z) + e * LN2
     return 2.0 * _atanh_series(z) + e * LN2_C;
 }
 
