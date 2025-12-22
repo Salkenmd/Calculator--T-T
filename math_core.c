@@ -1,7 +1,12 @@
 #include "math_core.h"
 #include <stdint.h>
 
-// --- Custom IEEE 754 Primitives ---
+#ifndef NAN
+#define NAN (0.0/0.0)
+#endif
+#ifndef INFINITY
+#define INFINITY (1.0/0.0)
+#endif
 
 typedef union {
     double f;
@@ -51,30 +56,17 @@ Real mc_frexp(Real value, int *exp) {
 
     uint64_t raw_exp = (val.u & DBL_EXP_MASK) >> DBL_EXP_SHIFT;
     
-    // Handle denormals (raw_exp == 0)
-    // For now simple implementation: just return as is or normalize loosely
     if (raw_exp == 0) {
-        // Normalize: shift left until implicit 1
-        // This is a complex case. For this exercise, let's treat effectively 0 or just propagate for now.
-        // Proper way matches libc: mult by 2^54, reduce exp etc.
-        // Since we target E-16 for normal range inputs, let's focus on normal numbers first.
-        // TODO: Full denormal support.
-        *exp = 0; 
-        return value; 
+        int sub_exp;
+        Real norm_val = value * 18014398509481984.0;
+        Real ret = mc_frexp(norm_val, &sub_exp);
+        *exp = sub_exp - 54;
+        return ret;
     }
 
-    // frexp returns fractions in [0.5, 1)
-    // IEEE 754: 1.F * 2^(E-1023)
-    // We want m * 2^n = Val
-    // Set m = 1.F * 2^-1  (so m in [0.5, 1))
-    // Val = m * 2^1 * 2^(E-1023) = m * 2^(E - 1022)
-    // So n = E - 1022
-    
     int true_exp = (int)raw_exp - DBL_EXP_BIAS;
-    *exp = true_exp + 1; // n = E - 1023 + 1
+    *exp = true_exp + 1;
     
-    // Construct return value: set exponent to -1 biased (1022 or 0x3FE)
-    // So 1.M * 2^-1 = 0.5 * 1.M
     uint64_t new_exp = 0x3FEULL;
     val.u = (val.u & ~DBL_EXP_MASK) | (new_exp << DBL_EXP_SHIFT);
     
@@ -82,30 +74,123 @@ Real mc_frexp(Real value, int *exp) {
 }
 
 Real mc_ldexp(Real value, int exp) {
-   if (value == 0.0) return 0.0;
-   if (mc_isnan(value) || mc_isinf(value)) return value;
-   
-   DoubleU val;
-   val.f = value;
-   
-   uint64_t raw_exp = (val.u & DBL_EXP_MASK) >> DBL_EXP_SHIFT;
-   if (raw_exp == 0) return value; // Denormal pass-through
-   
-   long long new_exp = (long long)raw_exp + exp;
-   
-   if (new_exp <= 0) {
-       // Underflow to 0 (simplification, no denormal generation yet)
-       val.u &= DBL_SIGN_MASK; // keep sign, 0 payload
-       return val.f;
-   }
-   if (new_exp >= 2047) {
-       // Overflow to Inf
-       val.u = (val.u & DBL_SIGN_MASK) | DBL_EXP_MASK;
-       return val.f;
-   }
-   
-   val.u = (val.u & ~DBL_EXP_MASK) | ((uint64_t)new_exp << DBL_EXP_SHIFT);
-   return val.f;
+    if (value == 0.0) return 0.0;
+    if (mc_isnan(value) || mc_isinf(value)) return value;
+
+    int current_exp;
+    Real m = mc_frexp(value, &current_exp);
+    
+    long long new_exp_unbiased = (long long)current_exp + exp;
+    
+    long long biased_exp = new_exp_unbiased + 1022;
+    
+    DoubleU u;
+    
+    if (biased_exp >= 2047) {
+        u.f = value;
+        u.u = (u.u & DBL_SIGN_MASK) | DBL_EXP_MASK;
+        return u.f;
+    }
+    
+    if (biased_exp <= 0) {
+        long long shift = 1 - biased_exp;
+        if (shift > 53) {
+            u.f = value;
+            u.u &= DBL_SIGN_MASK;
+            return u.f;
+        }
+        
+        u.f = m;
+        uint64_t mant = (u.u & DBL_MANT_MASK) | (1ULL << 52);
+        mant >>= shift;
+        
+        DoubleU sign_u; 
+        sign_u.f = value;
+        u.u = (sign_u.u & DBL_SIGN_MASK) | mant;
+        return u.f;
+    }
+    
+    u.f = m;
+    uint64_t mant = u.u & DBL_MANT_MASK;
+    
+    DoubleU res;
+    DoubleU sign_u;
+    sign_u.f = value;
+    
+    res.u = (sign_u.u & DBL_SIGN_MASK) | ((uint64_t)biased_exp << DBL_EXP_SHIFT) | mant;
+    return res.f;
+}
+
+Real mc_modf(Real x, Real *iptr) {
+    if (mc_isnan(x)) { *iptr = x; return x; }
+    if (mc_isinf(x)) { *iptr = x; return 0.0; }
+    if (x == 0.0) { *iptr = x; return x; }
+
+    DoubleU u;
+    u.f = x;
+    uint64_t e_bits = (u.u & DBL_EXP_MASK) >> DBL_EXP_SHIFT;
+    int e = (int)e_bits - DBL_EXP_BIAS;
+
+    if (e < 0) {
+        u.u &= DBL_SIGN_MASK;
+        *iptr = u.f;
+        return x;
+    }
+    if (e >= 52) {
+        *iptr = x;
+        u.u &= DBL_SIGN_MASK;
+        return u.f;
+    }
+
+    uint64_t mask = -1ULL;
+    mask <<= (52 - e);
+
+    DoubleU i_val;
+    i_val.u = u.u & mask;
+    *iptr = i_val.f;
+
+    return x - *iptr;
+}
+
+Real mc_fmod(Real x, Real y) {
+    if (y == 0.0) return NAN; 
+    Real q = x / y;
+    Real iptr;
+    mc_modf(q, &iptr);
+    return x - iptr * y;
+}
+
+Real mc_floor(Real x) {
+    if (mc_isnan(x) || mc_isinf(x)) return x;
+    Real iptr;
+    Real frac = mc_modf(x, &iptr);
+    if (frac < 0.0) return iptr - 1.0;
+    return iptr;
+}
+
+Real mc_ceil(Real x) {
+    if (mc_isnan(x) || mc_isinf(x)) return x;
+    Real iptr;
+    Real frac = mc_modf(x, &iptr);
+    if (frac > 0.0) return iptr + 1.0;
+    return iptr;
+}
+
+Real mc_round(Real x) {
+    if (mc_isnan(x) || mc_isinf(x)) return x;
+    Real iptr;
+    Real frac = mc_modf(x, &iptr);
+    Real abs_frac = mc_fabs(frac);
+
+    if (abs_frac > 0.5) {
+        if (x > 0) return iptr + 1.0;
+        return iptr - 1.0;
+    }
+    if (abs_frac == 0.5) {
+        if (x > 0) return iptr + 1.0;
+        return iptr - 1.0;
+    }
+    return iptr;
 }
 
 // --- Coefficients Embedded ---
@@ -113,6 +198,8 @@ Real mc_ldexp(Real value, int exp) {
 const Real E_F_C = 2.7182818284590450907955982984276488;
 static const Real LN2_C = 0.69314718055994528622676398299518041;
 static const Real LN2_F_C = 0.69314718055994528622676398299518041;
+
+
 const Real PI_C = 3.1415926535897931159979634685441852;
 const Real PI_2_C = 1.5707963267948965579989817342720926;
 static const Real PI_2_F_C = 1.5707963267948965579989817342720926;
@@ -239,7 +326,7 @@ static const Real numerator_cbrt_13_13[] = {
 static const int numerator_cbrt_13_13_len = 14;
 
 static const Real numerator_exp[] = {
-    1, 0.5, 0.11999999999999999555910790149937384, 0.018333333333333333425851918718763045,
+    1, 0.5, 0.12, 0.018333333333333333425851918718763045,
     0.0019927536231884057128793674706912498, 0.00016304347826086957803926047461118287,
     1.0351966873706003395257460586442733e-05, 5.1759834368530021211452039203715358e-07,
     2.04315135665250075022251601561743e-08, 6.3060227057175949591547168724629119e-10,
@@ -346,14 +433,14 @@ int rem_pio2(Real x, Real *y) {
         int shift = e_int - 24 * (k + 1);
         Real val = mc_ldexp(term, shift);
         Real ipart;
-        Real fpart = modf(val, &ipart); // Still using modf from math.h for now as it's cleaner
-        long long i_ll = (long long)fmod(ipart, 16.0); 
+        Real fpart = mc_modf(val, &ipart);
+        long long i_ll = (long long)mc_fmod(ipart, 16.0); 
         accum_quad += i_ll;
         accum_frac += fpart;
     }
     
     Real f_ipart;
-    Real f_fpart = modf(accum_frac, &f_ipart);
+    Real f_fpart = mc_modf(accum_frac, &f_ipart);
     accum_quad += (long long)f_ipart;
     accum_frac = f_fpart;
     
@@ -421,8 +508,17 @@ Real mc_cbrt(Real x) {
 }
 
 Real mc_exp(Real x) {
-    Real k_float = round(x / LN2_F_C);
+    if (mc_isnan(x)) return x;
+    if (mc_isinf(x)) return (x > 0) ? x : 0.0;
+    
+    // Bounds check to avoid overflow/underflow or excessive computation
+    if (x > 709.78) return INFINITY;
+    if (x < -745.13) return 0.0;
+    
+    Real k_float = mc_round(x / LN2_F_C);
     int k = (int)k_float;
+    
+    // Standard reduction: r = x - k * LN2
     Real r = x - k * LN2_C; 
     
     Real e_r = rational_eval(r, numerator_exp, numerator_exp_len, denumerator_exp, denumerator_exp_len);
@@ -549,16 +645,24 @@ static Real _atanh_series(Real z) {
 Real mc_ln1p(Real u) {
     if (u <= -1) return NAN;
     if (u == 0) return 0;
-    Real m = 1.0 + u;
-    Real z = (m - 1.0) / (m + 1.0);
-    return 2.0 * _atanh_series(z);
+    
+    // For small u, use atanh method: ln(1+u) = 2 atanh( u / (2+u) )
+    // If u is large, use mc_ln(1+u).
+    if (mc_fabs(u) < 0.375) {
+        Real z = u / (2.0 + u);
+        return 2.0 * _atanh_series(z);
+    }
+    return mc_ln(1.0 + u);
 }
 
 Real mc_ln(Real x) {
     if (x <= 0) return NAN;
     int e;
     Real m = mc_frexp(x, &e);
+    // m is [0.5, 1). z = (m-1)/(m+1) is in [-1/3, 0).
+    // range of z is small, series should converge well.
     Real z = (m - 1.0) / (m + 1.0);
+    // 2 * atanh(z) + e * LN2
     return 2.0 * _atanh_series(z) + e * LN2_C;
 }
 
