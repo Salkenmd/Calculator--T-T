@@ -1,5 +1,5 @@
 #README.md. Avoid built in modules and functions as much as possible. Some direct hardware communication is allowed but this is still a project where I try to learn numerical analysis.
-# Indev version 1.1
+# Indev version 1.1. This is a slop code. I do not recommend using it instead of a math library at all.
 from fractions import Fraction
 from math import frexp, ldexp
 
@@ -1148,3 +1148,4 @@ def evaluate(expr, variables=None):
     toks = _insert_implicit_multiplication(toks)
     rpn = to_rpn(toks)
     return eval_rpn(rpn, variables=variables)
+
